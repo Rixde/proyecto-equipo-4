@@ -1,0 +1,27 @@
+# App de demostración (frontend) para probar las Network Policies.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-html
+  namespace: frontend
+data:
+  index.html: |
+    <html><body><h1>Frontend - Proyecto 4 (Falco + Network Policies)</h1></body></html>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-html
+  namespace: backend
+data:
+  index.html: |
+    <html><body><h1>Backend - datos internos (solo accesible desde frontend)</h1></body></html>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: database-html
+  namespace: database
+data:
+  index.html: |
+    <html><body><h1>Database - solo accesible desde backend</h1></body></html>

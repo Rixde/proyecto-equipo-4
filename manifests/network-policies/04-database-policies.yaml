@@ -1,0 +1,24 @@
+# database es la capa más interna: solo acepta ingress desde pods
+# "app=backend" del namespace backend, en el puerto 80. No tiene egress
+# permitido salvo DNS (01-allow-dns.yaml) - no le habla a nadie.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-backend
+  namespace: database
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backend
+          podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 80

@@ -1,0 +1,24 @@
+# Ejemplo INVÁLIDO (a propósito) para testing de validación:
+#   1) "policyTypes" mal escrito como "policyType" (typo, campo no reconocido
+#      correctamente por el esquema -> falla la validación server-side).
+#   2) "port" como string no numérico ni nombre de puerto válido.
+# Probar con: kubectl apply -f examples/invalid-resource.yaml --dry-run=server
+#   Debe rechazarlo el API server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: example-invalid-policy
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyType: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: "no-es-un-puerto"

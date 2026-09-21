@@ -1,4 +1,3 @@
-# Diplomado Infraestructura en Tecnologías de la Información
 # Proyecto 4: Falco + Network Policies (Runtime Security)
 
 

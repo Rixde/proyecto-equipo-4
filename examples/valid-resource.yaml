@@ -1,0 +1,24 @@
+# Ejemplo válido de NetworkPolicy: permite tráfico ingress hacia "backend"
+# únicamente desde pods "app=frontend" del namespace "frontend", puerto 80.
+# Aplicar con: kubectl apply -f examples/valid-resource.yaml --dry-run=server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: example-valid-allow-from-frontend
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: frontend
+          podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 80

@@ -1,0 +1,43 @@
+# frontend es la puerta pública (NodePort): acepta ingress de cualquier
+# origen en el puerto 80, pero solo puede salir (egress) hacia backend:80
+# (+ DNS, permitido en 01-allow-dns.yaml). No tiene salida a internet NI a
+# database directamente (frontend -> database es el flujo que debe quedar
+# BLOQUEADO pese a que backend sí puede llegar a database - ver
+# 03-backend-policies.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-public
+  namespace: frontend
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes: [Ingress]
+  ingress:
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-backend
+  namespace: frontend
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backend
+          podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 80

@@ -1,0 +1,307 @@
+# Values override para el chart público falcosecurity/falco.
+# Se aplica con: helm install/upgrade falco falcosecurity/falco -n falco -f helm/chart/values.yaml
+# (ver scripts/install.sh)
+#
+# Reglas fusionadas: base propia + reglas del equipo de Ricardo Uarte
+# (Secuencia_ejecucion2.sh), consolidadas para evitar duplicados y quedarnos
+# con la versión más precisa de cada detección cuando ambos equipos cubrían
+# lo mismo.
+
+driver:
+  kind: modern_ebpf   # eBPF sin necesidad de compilar módulo de kernel (Rocky Linux 9)
+
+tty: true             # permite ver las alertas también en el log del pod de Falco
+
+falcosidekick:
+  enabled: true
+  webui:
+    enabled: true
+    redis:
+      storageEnabled: false
+      # Sin persistencia: para este laboratorio no necesitamos que el
+      # historial de alertas sobreviva un reinicio del pod, y evita depender
+      # de un StorageClass en el clúster (simplificación adoptada del equipo
+      # de Ricardo Uarte tras ambos topar con el mismo PVC en 'Pending').
+  config:
+    slack:
+      minimumpriority: warning
+      # El webhookurl NUNCA se guarda aquí (secreto). Se inyecta en tiempo de
+      # instalación vía --set desde scripts/install.sh, leyendo la variable de
+      # entorno FALCO_SLACK_WEBHOOK_URL (ver .env.example).
+
+customRules:
+  falco-rules-custom.yaml: |-
+    # 21 reglas custom (mínimo pedido: 15), documentadas en docs/iso27001.md
+    # (tabla regla -> qué detecta -> severidad -> acción esperada).
+
+    - list: system_binaries
+      items: [/bin/bash, /bin/sh, /usr/bin/passwd, /usr/bin/sudo, /bin/su,
+              /usr/bin/ssh, /usr/sbin/sshd, /usr/bin/curl, /usr/bin/wget]
+
+    - list: watchlist_ips
+      items: [8.8.8.8, 1.1.1.1]
+
+    # Namespaces de infraestructura del propio clúster: sus componentes hacen
+    # cosas que en un namespace de aplicación serían sospechosas (leer su
+    # propio SA token, escribir config, abrir puertos no estándar), pero es
+    # su operación normal. Se excluyen de TODAS las reglas para poder
+    # distinguir la señal real en las demos. Ver docs/iso27001.md (A.5.25,
+    # criterio de triage).
+    - list: system_namespaces
+      items: [kube-system, kube-node-lease, kube-public, falco]
+
+    # === Grupo 1: acceso y ejecución en el contenedor ===
+
+    - rule: Shell spawneada en contenedor
+      desc: Detecta la ejecución interactiva de una shell dentro de un contenedor.
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and proc.name in (bash, sh, zsh, ash, dash, ksh)
+      output: >
+        Shell spawneada en contenedor (usuario=%user.name comando=%proc.cmdline
+        contenedor=%container.name pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: WARNING
+      tags: [T1059, shell]
+
+    - rule: Herramienta de reconocimiento ejecutada
+      desc: Detecta la ejecución de herramientas de escaneo/sniffing dentro de un contenedor.
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and proc.name in (nmap, tcpdump, nikto, masscan)
+      output: >
+        Herramienta de reconocimiento ejecutada en contenedor
+        (comando=%proc.cmdline contenedor=%container.name pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [T1046, discovery]
+
+    - rule: Herramienta de transferencia de red sospechosa
+      desc: Ejecución de herramientas de descarga/transferencia de red dentro de un contenedor de aplicación.
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and proc.name in (curl, wget, nc, ncat, netcat)
+      output: >
+        Herramienta de red lanzada en contenedor (herramienta=%proc.name
+        comando=%proc.cmdline contenedor=%container.name pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [T1105, command_and_control]
+
+    - rule: Ejecución de binario desde directorio temporal
+      desc: Detecta ejecución de binarios ubicados en directorios de escritura común (típico de malware descargado en tiempo de ejecución).
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and (proc.exepath startswith /tmp
+             or proc.exepath startswith /dev/shm
+             or proc.exepath startswith /var/tmp)
+      output: >
+        Ejecución de binario desde directorio temporal - posible malware
+        descargado (ejecutable=%proc.exepath comando=%proc.cmdline contenedor=%container.name)
+      priority: CRITICAL
+      tags: [T1105, execution]
+
+    # === Grupo 2: escalación de privilegios ===
+
+    - rule: Uso de sudo o su en contenedor
+      desc: Detecta intentos de elevar privilegios vía comando dentro de un contenedor.
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and proc.name in (sudo, su)
+      output: >
+        Posible escalación de privilegios por comando (usuario=%user.name
+        comando=%proc.cmdline contenedor=%container.name)
+      priority: WARNING
+      tags: [T1548, privilege_escalation]
+
+    - rule: Cambio inesperado de UID a root
+      desc: Un proceso cambia su UID efectivo a root (setuid/setresuid) sin ser una herramienta esperada de elevación.
+      condition: >
+        container and evt.type in (setuid, setresuid) and not k8s.ns.name in (system_namespaces)
+        and not proc.name in (sudo, su, sshd) and not proc.name startswith "runc"
+      output: >
+        Posible escalación de privilegios por syscall (proceso=%proc.name
+        contenedor=%container.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [T1068, privilege_escalation]
+
+    - rule: Contenedor privilegiado iniciado
+      desc: Detecta el arranque de un contenedor con la bandera privileged (acceso casi total al host).
+      condition: >
+        evt.type=container and container.privileged=true and not k8s.ns.name in (system_namespaces)
+      output: >
+        Contenedor privilegiado iniciado (contenedor=%container.name
+        imagen=%container.image.repository pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [T1610, privilege_escalation]
+
+    - rule: Uso de capability peligrosa dentro de contenedor
+      desc: >
+        Un proceso tiene efectiva una capability de Linux de alto riesgo,
+        incluso sin que el contenedor sea privileged (capability otorgada
+        individualmente vía securityContext).
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and not proc.name startswith "runc" and not proc.pname startswith "runc"
+        and (thread.cap_effective contains CAP_SYS_ADMIN
+             or thread.cap_effective contains CAP_SYS_MODULE
+             or thread.cap_effective contains CAP_SYS_PTRACE
+             or thread.cap_effective contains CAP_NET_ADMIN)
+      output: >
+        Capability peligrosa activa (proceso=%proc.name
+        capabilities=%thread.cap_effective contenedor=%container.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [T1611, privilege_escalation]
+
+    - rule: Manipulación de namespaces de Linux
+      desc: Detecta herramientas o syscalls usados comúnmente para escapar del aislamiento de contenedores.
+      condition: >
+        container and not k8s.ns.name in (system_namespaces) and not proc.name startswith "runc"
+        and ((spawned_process and proc.name in (unshare, nsenter)) or evt.type in (unshare, setns))
+      output: >
+        Manipulación de namespaces de Linux (evento=%evt.type
+        proceso=%proc.name contenedor=%container.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [T1611, defense_evasion]
+
+    - rule: Acceso a filesystem del host o socket del runtime
+      desc: Actividad de archivos sobre rutas que corresponden a un hostPath sensible del nodo o al socket del runtime de contenedores.
+      condition: >
+        container and not k8s.ns.name in (system_namespaces)
+        and (fd.name startswith /host or fd.name startswith /var/run/containerd
+             or fd.name startswith /var/run/docker.sock)
+      output: >
+        Acceso a ruta sensible del host (archivo=%fd.name proceso=%proc.name
+        contenedor=%container.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [T1611, defense_evasion]
+
+    # === Grupo 3: persistencia ===
+
+    - rule: Escritura en directorio del sistema
+      desc: Detecta escritura de cualquier archivo bajo directorios sensibles del SO.
+      condition: >
+        open_write and container and not k8s.ns.name in (system_namespaces)
+        and fd.directory in (/etc, /bin, /usr/bin, /sbin, /usr/sbin)
+      output: >
+        Escritura sospechosa bajo directorio del sistema (usuario=%user.name
+        comando=%proc.cmdline archivo=%fd.name contenedor=%container.name)
+      priority: ERROR
+      tags: [T1222, persistence]
+
+    - rule: Modificación de binario crítico (escritura)
+      desc: Detecta sobreescritura de binarios críticos conocidos del sistema.
+      condition: >
+        open_write and container and not k8s.ns.name in (system_namespaces)
+        and fd.name in (system_binaries)
+      output: >
+        Se modificó un binario crítico del sistema (archivo=%fd.name
+        comando=%proc.cmdline contenedor=%container.name)
+      priority: CRITICAL
+      tags: [T1222, persistence]
+
+    - rule: Modificación de binario del sistema (permisos/rename)
+      desc: Cambio de permisos o renombrado de un archivo dentro de directorios de binarios del sistema.
+      condition: >
+        container and not k8s.ns.name in (system_namespaces)
+        and evt.type in (chmod, fchmodat, rename, renameat, renameat2)
+        and fd.directory in (/bin, /usr/bin, /sbin, /usr/sbin)
+      output: >
+        Modificación de binario del sistema (evento=%evt.type archivo=%fd.name
+        proceso=%proc.name contenedor=%container.name)
+      priority: ERROR
+      tags: [T1222, defense_evasion]
+
+    - rule: Modificación de configuración de cron
+      desc: Detecta escritura en archivos de tareas programadas (mecanismo común de persistencia).
+      condition: >
+        open_write and container and not k8s.ns.name in (system_namespaces)
+        and (fd.name startswith /etc/cron or fd.name startswith /var/spool/cron
+             or fd.directory=/etc/cron.d)
+      output: >
+        Modificación de configuración de cron detectada (archivo=%fd.name
+        comando=%proc.cmdline contenedor=%container.name)
+      priority: WARNING
+      tags: [T1053, persistence]
+
+    - rule: Gestión de usuarios dentro de un contenedor
+      desc: Detecta creación/modificación de usuarios o contraseñas dentro de un contenedor.
+      condition: >
+        spawned_process and container and not k8s.ns.name in (system_namespaces)
+        and proc.name in (useradd, adduser, usermod, passwd, chpasswd)
+      output: >
+        Gestión de usuarios/contraseñas detectada en contenedor
+        (comando=%proc.cmdline contenedor=%container.name)
+      priority: WARNING
+      tags: [T1136, persistence]
+
+    # === Grupo 4: acceso a credenciales / secrets ===
+
+    - rule: Lectura de archivo de credenciales
+      desc: Detecta lectura de archivos que contienen credenciales o configuración sensible del sistema operativo.
+      condition: >
+        open_read and container and not k8s.ns.name in (system_namespaces)
+        and fd.name in (/etc/shadow, /etc/gshadow, /etc/security/opasswd,
+                         /etc/sudoers, /root/.ssh/id_rsa)
+      output: >
+        Lectura de archivo sensible de credenciales (usuario=%user.name
+        comando=%proc.cmdline archivo=%fd.name contenedor=%container.name)
+      priority: CRITICAL
+      tags: [T1552, credential_access]
+
+    - rule: Acceso a token de ServiceAccount
+      desc: Detecta lectura del token de ServiceAccount de Kubernetes montado en el pod.
+      condition: >
+        open_read and container and not k8s.ns.name in (system_namespaces)
+        and fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount
+      output: >
+        Acceso a Secret/token de ServiceAccount de Kubernetes (archivo=%fd.name
+        comando=%proc.cmdline contenedor=%container.name)
+      priority: WARNING
+      tags: [T1552, credential_access]
+
+    # === Grupo 5: red y exfiltración/impacto ===
+
+    - rule: Conexión saliente a puerto inusual
+      desc: >
+        Detecta conexiones TCP salientes exitosas desde un contenedor hacia
+        puertos distintos de los esperados (web/DNS/API).
+      condition: >
+        evt.type=connect and evt.dir=< and container and not k8s.ns.name in (system_namespaces)
+        and fd.l4proto=tcp and evt.rawres>=0
+        and not fd.sport in (80, 443, 53, 6443)
+      output: >
+        Conexión de red saliente sospechosa (comando=%proc.cmdline
+        conexion=%fd.name contenedor=%container.name)
+      priority: WARNING
+      tags: [T1071, command_and_control]
+
+    - rule: Conexión hacia IP en lista de vigilancia
+      desc: Conexión saliente desde un contenedor hacia una dirección IP marcada como de interés o no confiable.
+      condition: >
+        outbound and container and not k8s.ns.name in (system_namespaces)
+        and fd.sip in (watchlist_ips)
+      output: >
+        Conexión saliente hacia IP vigilada (destino=%fd.sip:%fd.sport
+        proceso=%proc.name contenedor=%container.name pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [T1071, command_and_control]
+
+    - rule: Conexión a puerto típico de minería de criptomonedas
+      desc: Conexión saliente hacia puertos comúnmente asociados a pools de minería de criptomonedas.
+      condition: >
+        outbound and container and not k8s.ns.name in (system_namespaces)
+        and fd.sport in (3333, 4444, 5555, 7777, 8080, 9999, 14444, 45560, 45700)
+      output: >
+        Posible tráfico de minería (destino=%fd.sip:%fd.sport
+        proceso=%proc.name contenedor=%container.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [T1496, impact]
+
+    - rule: Posible borrado de logs del sistema
+      desc: Eliminación de archivos de log dentro de un contenedor, intento típico de cubrir huellas tras una intrusión.
+      condition: >
+        container and not k8s.ns.name in (system_namespaces)
+        and evt.type in (unlink, unlinkat) and fd.name startswith /var/log
+      output: >
+        Posible borrado de logs (archivo=%fd.name proceso=%proc.name
+        contenedor=%container.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [T1070, defense_evasion]
