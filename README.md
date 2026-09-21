@@ -1,4 +1,6 @@
+# Diplomado Infraestructura en Tecnologías de la Información
 # Proyecto 4: Falco + Network Policies (Runtime Security)
+
 
 ## 🎯 Descripción del proyecto
 
@@ -51,10 +53,8 @@ Proyecto orientado a la seguridad en tiempo de ejecución (runtime security) de 
 
 ## 👥 Integrantes del equipo
 
-- Nombre completo — Rol
-- Nombre completo — Rol
-- Nombre completo — Rol
-- Nombre completo — Rol
+- Juárez Ugalde Ricardo
+- Uarte Ortiz Enrique Yahir
 
 ## 🔧 Prerrequisitos (versiones de software)
 
