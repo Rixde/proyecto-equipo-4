@@ -2,10 +2,6 @@
 # Se aplica con: helm install/upgrade falco falcosecurity/falco -n falco -f helm/chart/values.yaml
 # (ver scripts/install.sh)
 #
-# Reglas fusionadas: base propia + reglas del equipo de Ricardo Uarte
-# (Secuencia_ejecucion2.sh), consolidadas para evitar duplicados y quedarnos
-# con la versión más precisa de cada detección cuando ambos equipos cubrían
-# lo mismo.
 
 driver:
   kind: modern_ebpf   # eBPF sin necesidad de compilar módulo de kernel (Rocky Linux 9)
@@ -20,8 +16,7 @@ falcosidekick:
       storageEnabled: false
       # Sin persistencia: para este laboratorio no necesitamos que el
       # historial de alertas sobreviva un reinicio del pod, y evita depender
-      # de un StorageClass en el clúster (simplificación adoptada del equipo
-      # de Ricardo Uarte tras ambos topar con el mismo PVC en 'Pending').
+      # de un StorageClass en el clúster.
   config:
     slack:
       minimumpriority: warning
@@ -31,7 +26,7 @@ falcosidekick:
 
 customRules:
   falco-rules-custom.yaml: |-
-    # 21 reglas custom (mínimo pedido: 15), documentadas en docs/iso27001.md
+    # 21 reglas custom, documentadas en docs/iso27001.md
     # (tabla regla -> qué detecta -> severidad -> acción esperada).
 
     - list: system_binaries
