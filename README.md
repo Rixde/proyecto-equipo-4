@@ -19,13 +19,13 @@ Proyecto orientado a la seguridad en tiempo de ejecución (runtime security) de 
 
 ### ✅ Qué implementamos
 
-- **Falco + Falcosidekick**, con **21 reglas custom** (mínimo pedido: 15) — fusión sin duplicados de las reglas de ambos integrantes del equipo, organizadas por táctica (ejecución, escalación de privilegios, persistencia, credenciales, red/impacto) y con exclusión explícita de namespaces de infraestructura para evitar falsos positivos.
+- **Falco + Falcosidekick**, con 21 reglas custom organizadas por táctica (ejecución, escalación de privilegios, persistencia, credenciales, red/impacto), con exclusión de namespaces de infraestructura para evitar falsos positivos.
 - **Alertas a Slack** en tiempo real, más un dashboard (**Falcosidekick UI**) expuesto de forma permanente vía `NodePort` — sin depender de `kubectl port-forward`.
 - **Network Policies de 3 capas** (`frontend → backend → database`): default-deny como base, whitelists explícitas por capa, y bloqueo **transitivo** verificado (`frontend` nunca llega a `database`, aunque `backend` sí pueda alcanzar ambas).
 - **Visualización de red en vivo con Hubble UI** (Cilium) — mapa de tráfico con veredicto (`forwarded`/`dropped`) de cada flujo, también expuesto por `NodePort` permanente.
-- **Testing automatizado**: 6 casos de conectividad (`tests/smoke-tests.sh`), disparadores individuales y completos de las 21 alertas (`tests/alerts/`, `tests/trigger-alerts.sh`), y verificación de que las reglas cargaron sin error (`scripts/test.sh`).
-- **Infraestructura reproducible**: clúster de 3 nodos (kubeadm + Cilium + Hubble) provisionado con Ansible en un repositorio aparte — [`k8s-cilium-ansible`](https://github.com/Rixde/k8s-cilium-ansible.git) —, resultado de fusionar la automatización de un integrante con el entorno de 3 nodos y las reglas base del otro.
-- **Documentación completa**: guía de instalación, configuración razonada de cada componente, 12 incidentes reales de troubleshooting, y la ficha de controles ISO/IEC 27001 con evidencia concreta por control.
+- **Testing automatizado**: casos de conectividad de las Network Policies, disparadores individuales y completos de las alertas de Falco, y verificación de que las reglas cargaron sin error.
+- **Infraestructura reproducible**: clúster de 3 nodos (kubeadm + Cilium + Hubble) provisionado con Ansible en un repositorio aparte — [`k8s-cilium-ansible`](https://github.com/Rixde/k8s-cilium-ansible.git).
+- **Documentación completa**: guía de instalación, configuración razonada de cada componente, troubleshooting, y la ficha de controles ISO/IEC 27001 con evidencia concreta por control.
 
 ## 👥 Integrantes del equipo
 
