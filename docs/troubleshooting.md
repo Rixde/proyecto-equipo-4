@@ -182,3 +182,79 @@ condition: >
 ```
 
 **Relevancia para ISO/IEC 27001 (control A.5.25).** Este ajuste es evidencia directa de criterio en la clasificación de eventos de seguridad: se documenta como decisión consciente que excluye namespaces de infraestructura conocida, dejando el namespace `default` y cualquier namespace de aplicación futuro bajo vigilancia completa.
+
+---
+
+## 9. Pods de Hubble/Falcosidekick UI en `Pending` justo después de instalar Cilium
+
+**Síntoma.** `cilium status --wait` se queda colgado indefinidamente. `kubectl -n kube-system get pods` muestra `hubble-relay`/`hubble-ui` en `Pending`, con el evento:
+```
+Warning  FailedScheduling  0/1 nodes are available: 1 node(s) had untolerated taint(s)
+```
+
+**Causa raíz.** El playbook de Ansible instala Cilium/Hubble (`04-master.yml`) **antes** de que los workers se unan al clúster (`05-workers.yml`). En ese punto del despliegue solo existe el nodo master, y todavía conserva el *taint* estándar de control-plane (`node-role.kubernetes.io/control-plane:NoSchedule`) que `kubeadm` aplica por defecto — aunque el diseño del clúster espera que el master también funcione como worker. Con un único nodo *tainted* y sin tolerancia, cualquier `Deployment` sin `hostNetwork` (como `hubble-relay`/`hubble-ui`) no tiene dónde agendarse.
+
+**Solución.** Se agregó una tarea en `04-master.yml` que quita el taint del control-plane **antes** de instalar Cilium/Hubble, para que el nodo quede agendable de inmediato:
+```bash
+kubectl taint node <nodo> node-role.kubernetes.io/control-plane:NoSchedule-
+```
+
+**Lección.** El orden de las tareas en un playbook importa tanto como las tareas en sí: una suposición del diseño (“el master también agenda pods”) debe quedar establecida *antes* de cualquier paso que dependa de ella, no después.
+
+---
+
+## 10. Hubble UI muestra "1/3 nodes" — `firewalld` bloqueaba el tráfico de Hubble Relay hacia otros nodos
+
+**Síntoma.** El dashboard de Hubble UI carga, pero la esquina superior derecha muestra `1/3 nodes`, y namespaces con pods en otros nodos aparecen sin flujos ("No flows found").
+
+**Causa raíz.** Hubble Relay se conecta al puerto `4244` de cada agente de Cilium (que usa `hostNetwork`, es decir, escucha en la IP real del nodo, no en una IP de pod). Cilium enmascara (SNAT) el tráfico de un pod hacia una IP de nodo — porque, desde la perspectiva del `pod_cidr`, la IP de un nodo es un destino "externo" — así que al llegar al nodo destino, la IP de origen ya no es la del pod de Hubble Relay, sino la IP del **nodo que envía**. Esa IP no está en la regla de zona `trusted` de `firewalld` (que solo confía en `pod_cidr`/`service_cidr`), así que la zona por defecto (`public`, target `REJECT`) la bloquea.
+
+**Diagnóstico.**
+```bash
+kubectl -n kube-system logs deploy/hubble-relay --tail=30
+kubectl -n kube-system get endpoints hubble-peer
+```
+El log de Relay muestra explícitamente a qué IP no logra conectarse.
+
+**Solución.** Igual que con el puerto de *health checks* de Cilium (`4240`, ver `docs/configuration.md`), se abrió explícitamente el puerto de Hubble en `firewalld` de los 3 nodos:
+```bash
+sudo firewall-cmd --permanent --add-port=4244/tcp
+sudo firewall-cmd --reload
+```
+
+**Lección.** Confiar en `pod_cidr` como origen no cubre tráfico host-a-host entre nodos (salud entre agentes, Hubble, etc.) — ese tráfico sale con la IP del nodo emisor, no con una IP de pod, y necesita su propia regla explícita de firewall aunque el origen "real" sea un pod.
+
+---
+
+## 11. `install.sh` reporta "Failed to install helm" aunque la instalación sí funcionó
+
+**Síntoma.** El script se detiene justo después de que el propio instalador de Helm imprime `helm installed into /usr/local/bin/helm`, con el mensaje:
+```
+helm not found. Is /usr/local/bin on your $PATH?
+Failed to install helm
+```
+Al correr `install.sh` de nuevo, no reinstala nada y continúa sin problema.
+
+**Causa raíz.** El instalador oficial de Helm (`get_helm.sh`) se corre con `sudo`, y al final hace su propia autoverificación (`command -v helm`) **dentro de esa sesión de `sudo`**. En Rocky/RHEL, el `$PATH` restringido que usa `sudo` (`secure_path`) no incluye `/usr/local/bin` — el mismo problema, exactamente, documentado en este proyecto para Cilium (ver `docs/configuration.md`). El binario sí se instaló correctamente; solo la autoverificación de `get_helm.sh`, con ese `$PATH` recortado, no lo encuentra. Como `install.sh` usa `set -euo pipefail`, ese código de salida distinto de cero detiene todo el script.
+
+**Solución.** No confiar en el código de salida de `get_helm.sh`, y verificar con el `$PATH` real del usuario que corre el script:
+```bash
+sudo /tmp/get_helm.sh || true
+command -v helm >/dev/null 2>&1 || { echo "Error: Helm no quedó disponible."; exit 1; }
+```
+
+**Lección.** Es el mismo patrón de fondo que el incidente de Cilium: cualquier script que se autoverifica corriendo bajo `sudo` puede dar un falso negativo si su `$PATH` restringido no coincide con el `$PATH` real del usuario. Conviene no confiar ciegamente en el código de salida de herramientas de terceros corridas con `sudo`.
+
+---
+
+## 12. `trigger-alerts.sh` generó más de 180 alertas en una sola corrida (se esperaban 21)
+
+**Síntoma.** Una sola ejecución de `trigger-alerts.sh` (pensado para disparar 21 alertas, una por regla) llenó Slack con más de 180 mensajes.
+
+**Causa raíz.** El script instalaba 3 herramientas con `apk add --no-cache nmap python3 util-linux` para poder disparar 3 de las reglas de demostración. Instalar un paquete en Alpine escribe (y a veces cambia permisos de) decenas de archivos dentro de `/usr/bin`, `/usr/sbin` y `/etc` — cada uno de esos archivos hizo *match* individualmente con la regla *"Escritura en directorio del sistema"*, generando una alerta por archivo instalado, no una alerta por acción intencional.
+
+**Diagnóstico.** Comparar el campo `pod=`/`comando=` de las alertas contra lo que el script realmente ejecutó a propósito — la mayoría correspondían a `apk`, no a ninguna de las 21 acciones de demostración.
+
+**Solución.** Se rediseñaron los disparadores individuales (`tests/alerts/01` a `05`) para no depender de instalar ningún paquete adicional — se eligieron 5 reglas que se pueden disparar con herramientas que ya vienen en la imagen base (`sh`, `wget`, `chmod`, etc.), evitando el ruido de raíz en vez de intentar filtrarlo con una regla adicional.
+
+**Relevancia para ISO/IEC 27001 (control A.5.25).** Es una categoría de ruido distinta a la del incidente 8: no es actividad rutinaria de la infraestructura del clúster, sino un efecto secundario del propio proceso de *testing* de seguridad. Ambos casos refuerzan la misma idea: el criterio de qué es ruido operativo esperado debe documentarse explícitamente, no descubrirse a mitad de una demo en vivo.
