@@ -14,7 +14,7 @@
 # /usr/sbin/sshd, que no existe en la imagen base y por lo tanto se crea sin
 # afectar nada.
 set -uo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../scripts/_env.sh"
 
 NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 

@@ -60,7 +60,7 @@ dashboards de Falcosidekick UI y Hubble UI como `NodePort` permanente
 ```bash
 ./tests/smoke-tests.sh        # valida las Network Policies (permitido/bloqueado)
 ./scripts/test.sh             # confirma que Falco y las 21 reglas cargaron
-./scripts/alerts/01-shell.sh  # dispara una alerta de prueba
+./tests/alerts/01-shell.sh    # dispara una alerta de prueba
 ```
 
 ## Desinstalar
