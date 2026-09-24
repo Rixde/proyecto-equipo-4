@@ -2,7 +2,7 @@
 
 ## Clúster base
 
-- 3 nodos Kubernetes (kubeadm), CNI **Cilium** (+ Hubble), provisionados con Ansible (repo `k8s-ansible`).
+- 3 nodos Kubernetes (kubeadm), CNI **Cilium** (+ Hubble), provisionados con Ansible (repo [`k8s-cilium-ansible`](https://github.com/Rixde/k8s-cilium-ansible.git)).
 - `k8s.master01` actúa como control-plane **y** worker (sin taint), `k8s.worker01` y `k8s.worker02` son los otros dos workers.
 - Entorno original de 3 nodos y parte del trabajo de Falco/Network Policies aportado por el equipo de Ricardo Uarte; fusionado con nuestra base de Ansible + Cilium (que reemplazó su instalación manual de Calico) y nuestras reglas/manifiestos declarativos.
 

@@ -35,8 +35,8 @@ avisa con un mensaje claro si falta algo.
 
 Si estás construyendo el clúster desde cero y quieres un ejemplo ya probado
 que cumple todos los prerrequisitos (incluido Cilium+Hubble), pueden usar el
-repo `k8s-ansible` del equipo — es un ejemplo de referencia, no una
-dependencia de este proyecto.
+repo [`k8s-cilium-ansible`](https://github.com/Rixde/k8s-cilium-ansible.git)
+del equipo — es un ejemplo de referencia, no una dependencia de este proyecto.
 
 ## Configurar acceso a `kubectl`
 
