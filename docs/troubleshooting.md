@@ -28,7 +28,7 @@ kubectl delete pods -n calico-system -l k8s-app=calico-node
 
 ---
 
-## 2. Interfaces del CNI bloqueadas por `firewalld` *(histórico — Calico, con efecto persistente)*
+## 2. Interfaces del CNI bloqueadas por `firewalld` *(histórico — Calico, ya no aplica con Cilium)*
 
 **Síntoma.** El pod de Falco en `worker1` quedaba indefinidamente en `Init:Error`; el init container no podía resolver DNS ni siquiera hacia `kubernetes.default`.
 
@@ -44,9 +44,9 @@ systemctl disable --now firewalld
 
 Es honesto documentar que mover las interfaces a la zona `trusted` fue el diagnóstico correcto, pero lo que en la práctica destrabó el tráfico fue deshabilitar `firewalld` por completo, ya que ambos pasos se aplicaron juntos sin probar el primero de forma aislada. Por un efecto secundario de terminal, `master` también terminó con `firewalld` deshabilitado.
 
-**Decisión de diseño (documentada también en `docs/iso27001.md`, control A.8.20).** `firewalld` permanece deshabilitado en los 3 nodos del clúster. Riesgo aceptado porque la red es solo-anfitrión de VirtualBox (`192.168.56.0/24`) sin exposición externa; queda marcado como pendiente de compensar si el proyecto llegara a producción, por ejemplo con Network Policies asumiendo la segmentación que `firewalld` hacía a nivel de host.
+**Por qué ocurrió con Calico.** La instalación original de Calico se hizo a mano y no incluía ninguna regla de `firewalld` para el tráfico de pods: sus interfaces (`vxlan.calico`, `cali*`) quedaban en la zona `public` por defecto. El problema no se reprodujo con **Cilium** porque su instalación se hace con Ansible (`k8s-cilium-ansible`, `01-prepare.yml`), que configura `firewalld` junto con el CNI: agrega `pod_cidr` y `service_cidr` a la zona `trusted` (por origen, no por interfaz) y abre los puertos propios de Cilium (`8472/udp`, `4240/tcp`, `4244/tcp`).
 
-**Nota de vigencia.** Esta condición (`firewalld` deshabilitado) se mantiene en los 3 nodos tras la migración a Cilium, ya que los mismos nodos/VMs se reutilizaron. Con Cilium no se ha necesitado ninguna excepción adicional de `firewalld`.
+**Nota de vigencia (corrección).** Una versión anterior de este documento y de `docs/iso27001.md` afirmaba que `firewalld` seguía deshabilitado en los 3 nodos tras la migración a Cilium, como "riesgo aceptado". **Eso era incorrecto**: al reaprovisionar los nodos con Ansible para la migración a Cilium, el playbook vuelve a habilitar y arrancar `firewalld` en todos los nodos. El estado actual es **`firewalld` activo en los 3 nodos** con reglas específicas por rol (detalle en `docs/iso27001.md`, control A.8.20). La deshabilitación de `firewalld` fue una medida temporal propia de la etapa con Calico. Muestra de que `firewalld` está activo con Cilium: el incidente 10, donde bloqueaba el tráfico de Hubble Relay.
 
 ---
 
@@ -216,11 +216,12 @@ kubectl -n kube-system get endpoints hubble-peer
 ```
 El log de Relay muestra explícitamente a qué IP no logra conectarse.
 
-**Solución.** Igual que con el puerto de *health checks* de Cilium (`4240`, ver `docs/configuration.md`), se abrió explícitamente el puerto de Hubble en `firewalld` de los 3 nodos:
+**Solución.** Igual que con el puerto de *health checks* de Cilium (`4240`), se abrió explícitamente el puerto de Hubble en `firewalld` de los 3 nodos:
 ```bash
 sudo firewall-cmd --permanent --add-port=4244/tcp
 sudo firewall-cmd --reload
 ```
+Ambos puertos quedaron incorporados de forma permanente en la lista `fw_ports` del repo de aprovisionamiento (`k8s-cilium-ansible`, `inventory/group_vars/masters.yml` y `workers.yml`), para que un reaprovisionamiento no vuelva a reproducir el problema.
 
 **Lección.** Confiar en `pod_cidr` como origen no cubre tráfico host-a-host entre nodos (salud entre agentes, Hubble, etc.) — ese tráfico sale con la IP del nodo emisor, no con una IP de pod, y necesita su propia regla explícita de firewall aunque el origen "real" sea un pod.
 
